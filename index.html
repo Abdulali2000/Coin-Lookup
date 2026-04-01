@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0f0f11">
+<title>Coin Scanner</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  :root {
+    --bg: #0f0f11;
+    --surface: #1a1a1f;
+    --surface2: #242430;
+    --border: rgba(255,255,255,0.1);
+    --text: #f0eff5;
+    --muted: #8886a0;
+    --green: #22c55e;
+    --amber: #f59e0b;
+    --blue: #60a5fa;
+    --purple: #a78bfa;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, system-ui, sans-serif;
+    overflow: hidden;
+  }
+
+  /* ── Layout: stacked on mobile, side-by-side on desktop ── */
+  .app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    height: 100dvh;
+  }
+
+  /* ── Header ── */
+  header {
+    flex-shrink: 0;
+    padding: env(safe-area-inset-top, 12px) 18px 12px;
+    padding-top: max(env(safe-area-inset-top), 12px);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  header h1 { font-size: 17px; font-weight: 600; }
+  header p  { font-size: 11px; color: var(--muted); }
+  .logo { font-size: 20px; }
+
+  /* ── Camera area ── */
+  .camera-wrap {
+    flex: 1;
+    position: relative;
+    background: #000;
+    overflow: hidden;
+    min-height: 0;
+  }
+  #video {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  /* Coin target ring */
+  .ring-overlay {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+  }
+  .ring {
+    width: min(55vw, 220px);
+    height: min(55vw, 220px);
+    border-radius: 50%;
+    border: 2.5px dashed rgba(255,255,255,0.35);
+    box-shadow: 0 0 0 2000px rgba(0,0,0,0.25);
+  }
+  /* Flash */
+  .flash {
+    position: absolute; inset: 0;
+    background: rgba(167,139,250,0.25);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.08s;
+  }
+  .flash.active { opacity: 1; }
+  /* Status strip at top of camera */
+  .cam-status {
+    position: absolute;
+    top: 10px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border-radius: 999px;
+    padding: 5px 14px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.85);
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  /* Verdict banner overlaid on camera when result arrives */
+  .verdict-overlay {
+    position: absolute;
+    bottom: 16px; left: 16px; right: 16px;
+    border-radius: 14px;
+    padding: 14px 16px;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    display: none;
+    animation: slideUp 0.25s ease;
+  }
+  @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  .verdict-overlay.keep   { background: rgba(34,197,94,0.2);  border: 1px solid rgba(34,197,94,0.4); }
+  .verdict-overlay.pass   { background: rgba(30,30,40,0.85);  border: 1px solid rgba(255,255,255,0.15); }
+  .verdict-overlay.silver { background: rgba(96,165,250,0.2); border: 1px solid rgba(96,165,250,0.4); }
+  .verdict-overlay.error-coin { background: rgba(245,158,11,0.2); border: 1px solid rgba(245,158,11,0.4); }
+  .vo-top { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+  .vo-badge {
+    padding: 3px 10px; border-radius: 999px;
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .keep   .vo-badge { background: rgba(34,197,94,0.2);  color: var(--green); }
+  .pass   .vo-badge { background: rgba(136,134,160,0.2);color: var(--muted); }
+  .silver .vo-badge { background: rgba(96,165,250,0.2); color: var(--blue);  }
+  .error-coin .vo-badge { background: rgba(245,158,11,0.2); color: var(--amber); }
+  .vo-coin  { font-size: 14px; font-weight: 600; flex: 1; }
+  .vo-meta  { font-size: 11px; color: rgba(255,255,255,0.55); margin-bottom: 5px; }
+  .vo-reason { font-size: 12px; color: rgba(255,255,255,0.8); line-height: 1.5; }
+  .vo-value { margin-top: 5px; font-size: 11px; color: var(--amber); }
+
+  /* ── Bottom controls ── */
+  .controls {
+    flex-shrink: 0;
+    padding: 14px 18px;
+    padding-bottom: max(env(safe-area-inset-bottom), 14px);
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .api-row {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .api-row label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .api-row input {
+    flex: 1;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 9px 12px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: monospace;
+  }
+  .api-row input:focus { outline: none; border-color: var(--purple); }
+
+  .bottom-row { display: flex; gap: 10px; align-items: center; }
+
+  /* Big scan button */
+  #scan-btn {
+    flex: 1;
+    height: 54px;
+    background: var(--purple);
+    color: #fff;
+    border: none;
+    border-radius: 14px;
+    font-size: 17px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    transition: opacity 0.15s, transform 0.1s;
+    -webkit-user-select: none;
+  }
+  #scan-btn:active { transform: scale(0.96); opacity: 0.9; }
+  #scan-btn:disabled { opacity: 0.35; }
+
+  /* History toggle button */
+  #history-btn {
+    width: 54px; height: 54px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    color: var(--text);
+    font-size: 20px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    position: relative;
+  }
+  .history-count {
+    position: absolute; top: 6px; right: 6px;
+    background: var(--purple);
+    color: #fff;
+    border-radius: 999px;
+    font-size: 9px; font-weight: 700;
+    padding: 1px 5px;
+    display: none;
+  }
+
+  /* ── History sheet ── */
+  .history-sheet {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    display: none;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+  .history-sheet.open { display: flex; }
+  .sheet-inner {
+    background: var(--surface);
+    border-radius: 20px 20px 0 0;
+    padding-bottom: env(safe-area-inset-bottom, 16px);
+    max-height: 75dvh;
+    display: flex;
+    flex-direction: column;
+  }
+  .sheet-handle {
+    width: 36px; height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin: 12px auto 0;
+    flex-shrink: 0;
+  }
+  .sheet-title {
+    padding: 12px 18px 10px;
+    font-size: 15px; font-weight: 600;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .sheet-close {
+    background: var(--surface2); border: none; border-radius: 999px;
+    color: var(--muted); font-size: 13px;
+    padding: 4px 12px; cursor: pointer;
+  }
+  .sheet-stats {
+    display: flex; gap: 12px;
+    padding: 10px 18px;
+    font-size: 12px; color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .sheet-stats strong { color: var(--text); font-size: 15px; }
+  .sheet-list {
+    overflow-y: auto;
+    padding: 10px 14px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .hist-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px;
+    background: var(--surface2);
+    border-radius: 10px;
+    cursor: pointer;
+  }
+  .hist-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .hist-dot.keep        { background: var(--green); }
+  .hist-dot.pass        { background: var(--muted); }
+  .hist-dot.silver      { background: var(--blue); }
+  .hist-dot.error-coin  { background: var(--amber); }
+  .hist-name { flex: 1; font-size: 13px; font-weight: 500; }
+  .hist-verdict { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+
+  canvas { display: none; }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <header>
+    <div class="logo">🪙</div>
+    <div>
+      <h1>Coin Scanner</h1>
+      <p>Point at a coin, then tap Scan</p>
+    </div>
+  </header>
+
+  <div class="camera-wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <div class="ring-overlay"><div class="ring"></div></div>
+    <div class="flash" id="flash"></div>
+    <div class="cam-status" id="cam-status">Starting camera…</div>
+
+    <!-- Result overlay on camera -->
+    <div class="verdict-overlay" id="verdict-overlay">
+      <div class="vo-top">
+        <span class="vo-badge" id="vo-badge"></span>
+        <span class="vo-coin" id="vo-coin"></span>
+      </div>
+      <div class="vo-meta" id="vo-meta"></div>
+      <div class="vo-reason" id="vo-reason"></div>
+      <div class="vo-value" id="vo-value"></div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="api-row">
+      <label>API Key</label>
+      <input type="password" id="api-key" placeholder="sk-ant-api03-…" autocomplete="off" />
+    </div>
+    <div class="bottom-row">
+      <button id="scan-btn" disabled>📷 Scan</button>
+      <button id="history-btn" onclick="openHistory()">
+        📋
+        <span class="history-count" id="history-count"></span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- History sheet -->
+<div class="history-sheet" id="history-sheet" onclick="closeHistoryOutside(event)">
+  <div class="sheet-inner">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">
+      History
+      <button class="sheet-close" onclick="closeHistory()">Done</button>
+    </div>
+    <div class="sheet-stats" id="sheet-stats" style="display:none">
+      <span><strong id="stat-total">0</strong> scanned</span>
+      <span><strong id="stat-keep">0</strong> keep</span>
+      <span><strong id="stat-pass">0</strong> wrap</span>
+    </div>
+    <div class="sheet-list" id="sheet-list"></div>
+  </div>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<script>
+const video       = document.getElementById('video');
+const canvas      = document.getElementById('canvas');
+const ctx         = canvas.getContext('2d');
+const scanBtn     = document.getElementById('scan-btn');
+const camStatus   = document.getElementById('cam-status');
+const flashEl     = document.getElementById('flash');
+const apiKeyInput = document.getElementById('api-key');
+const verdictOvl  = document.getElementById('verdict-overlay');
+const sheetList   = document.getElementById('sheet-list');
+const histCount   = document.getElementById('history-count');
+
+let cameraReady = false;
+let scanning = false;
+let history = [];
+let stats = { total: 0, keep: 0, pass: 0 };
+
+// Restore API key
+const saved = localStorage.getItem('coin_apikey');
+if (saved) apiKeyInput.value = saved;
+apiKeyInput.addEventListener('change', () => localStorage.setItem('coin_apikey', apiKeyInput.value.trim()));
+
+// Camera — use 'environment' for rear camera on iPhone
+async function startCamera() {
+  try {
+    const constraints = {
+      video: {
+        facingMode: { ideal: 'environment' },
+        width:  { ideal: 1920 },
+        height: { ideal: 1440 }
+      }
+    };
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
+    video.addEventListener('loadedmetadata', () => {
+      cameraReady = true;
+      updateBtn();
+      camStatus.textContent = 'Hold coin inside the circle';
+    });
+  } catch (e) {
+    camStatus.textContent = '⚠️ Camera error: ' + e.message;
+  }
+}
+
+function updateBtn() {
+  scanBtn.disabled = !cameraReady || scanning;
+}
+
+function flash() {
+  flashEl.classList.add('active');
+  setTimeout(() => flashEl.classList.remove('active'), 180);
+}
+
+function captureFrame() {
+  canvas.width  = video.videoWidth;
+  canvas.height = video.videoHeight;
+  ctx.drawImage(video, 0, 0);
+  return canvas.toDataURL('image/jpeg', 0.88).split(',')[1];
+}
+
+function verdictClass(v) {
+  if (!v) return 'pass';
+  v = v.toLowerCase();
+  if (v === 'silver') return 'silver';
+  if (v.includes('error')) return 'error-coin';
+  if (v === 'keep') return 'keep';
+  return 'pass';
+}
+
+async function scan() {
+  const apiKey = apiKeyInput.value.trim();
+  if (!apiKey) { alert('Paste your Anthropic API key first.'); apiKeyInput.focus(); return; }
+  if (scanning) return;
+  scanning = true;
+  updateBtn();
+  flash();
+
+  camStatus.textContent = 'Analyzing…';
+  verdictOvl.style.display = 'none';
+
+  const imageData = captureFrame();
+
+  const prompt = `You are a US coin expert. Analyze this coin and respond ONLY with a JSON object — no markdown, no text outside JSON:
+
+{
+  "coin": "e.g. 1964 Roosevelt Dime",
+  "denomination": "Quarter|Dime|Nickel|Penny|Half Dollar|Dollar|Unknown",
+  "year": "year or unknown",
+  "mint_mark": "D|S|P|W|none|unknown",
+  "verdict": "keep|pass|silver|error-coin",
+  "verdict_label": "KEEP IT|JUST WRAP IT|SILVER!|POSSIBLE ERROR!",
+  "reason": "1-2 sentences explaining the verdict",
+  "estimated_value": "e.g. face value or $2-5 or Silver melt ~$2.50",
+  "confidence": "high|medium|low"
+}
+
+Rules: silver = dimes/quarters/halves ≤1964 (90% Ag) or half dollars 1965-1970 (40% Ag); error-coin = doubling/off-center/wrong planchet; keep = key dates or numismatic value >$1; pass = common circulated. If no coin visible, verdict=pass and explain.`;
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-5',
+        max_tokens: 500,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: imageData } },
+            { type: 'text', text: prompt }
+          ]
+        }]
+      })
+    });
+
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+
+    const raw = data.content[0].text.trim();
+    let parsed;
+    try {
+      const clean = raw.replace(/```json|```/g, '').replace(/^[^{]*({[\s\S]*})[^}]*$/, '$1').trim();
+      parsed = JSON.parse(clean);
+    } catch {
+      const m = raw.match(/\{[\s\S]+\}/);
+      if (m) parsed = JSON.parse(m[0]);
+      else throw new Error('Unexpected response format');
+    }
+
+    showVerdict(parsed);
+    addHistory(parsed);
+    camStatus.textContent = parsed.coin || 'Done — scan another';
+
+  } catch (err) {
+    camStatus.textContent = '⚠️ ' + err.message;
+  }
+
+  scanning = false;
+  updateBtn();
+}
+
+function showVerdict(r) {
+  const vc = verdictClass(r.verdict);
+  verdictOvl.className = 'verdict-overlay ' + vc;
+  document.getElementById('vo-badge').textContent   = r.verdict_label || r.verdict || '';
+  document.getElementById('vo-coin').textContent    = r.coin || 'Unknown';
+  document.getElementById('vo-meta').textContent    = [r.denomination, r.year, r.mint_mark && r.mint_mark !== 'none' ? r.mint_mark : ''].filter(Boolean).join(' · ');
+  document.getElementById('vo-reason').textContent  = r.reason || '';
+  document.getElementById('vo-value').textContent   = r.estimated_value ? 'Est. value: ' + r.estimated_value : '';
+  verdictOvl.style.display = 'block';
+
+  // Haptic feedback on iPhone (if supported)
+  if (navigator.vibrate) navigator.vibrate(vc === 'pass' ? 40 : [40, 60, 80]);
+}
+
+function addHistory(r) {
+  const vc = verdictClass(r.verdict);
+  history.unshift(r);
+  stats.total++;
+  if (vc === 'pass') stats.pass++; else stats.keep++;
+
+  // Update count badge
+  histCount.textContent = stats.total;
+  histCount.style.display = 'block';
+
+  // Add to sheet list
+  const item = document.createElement('div');
+  item.className = 'hist-item';
+  item.innerHTML = `
+    <div class="hist-dot ${vc}"></div>
+    <div class="hist-name">${r.coin || 'Unknown'}</div>
+    <div class="hist-verdict">${r.verdict_label || r.verdict || ''}</div>`;
+  item.addEventListener('click', () => { showVerdict(r); closeHistory(); });
+  sheetList.prepend(item);
+
+  // Update stats in sheet
+  document.getElementById('sheet-stats').style.display = 'flex';
+  document.getElementById('stat-total').textContent = stats.total;
+  document.getElementById('stat-keep').textContent  = stats.keep;
+  document.getElementById('stat-pass').textContent  = stats.pass;
+}
+
+// History sheet
+function openHistory()  { document.getElementById('history-sheet').classList.add('open'); }
+function closeHistory() { document.getElementById('history-sheet').classList.remove('open'); }
+function closeHistoryOutside(e) {
+  if (e.target === document.getElementById('history-sheet')) closeHistory();
+}
+
+scanBtn.addEventListener('click', scan);
+
+// Prevent double-tap zoom on button
+scanBtn.addEventListener('touchend', e => { e.preventDefault(); scan(); });
+
+startCamera();
+</script>
+</body>
+</html>
